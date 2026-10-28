@@ -55,3 +55,22 @@ Intentar insertar dos reservas confirmadas superpuestas genera el error de viola
 ERROR:  conflicting key value violates exclusion constraint "prevent_double_booking"
 DETAIL:  Key (dock_id, time_range)=(...) conflicts with existing key (...)
 ```
+
+---
+
+## Capa API y Real-Time Streaming (SSE)
+
+### Endpoints HTTP
+
+- `POST /api/v1/reservations`: Creación atómica de reservas con protección por distributed lock y persistencia en PostgreSQL.
+  - Retorna `201 Created` en reserva confirmada.
+  - Retorna `423 Locked` si Redis lock está ocupado por una petición concurrente.
+  - Retorna `409 Conflict` si PostgreSQL GiST detecta superposición temporal.
+- `GET /api/v1/docks/stream`: Server-Sent Events (SSE) alimentado por Redis Pub/Sub (`docks.events`) con prevención de memory leaks por desconexión de clientes.
+- `GET /health`: Healthcheck estricto con ping a PostgreSQL y Redis (200 OK / 503 Service Unavailable).
+
+### Ejecución de Pruebas de Carga
+```bash
+k6 run scripts/load_test.js
+```
+

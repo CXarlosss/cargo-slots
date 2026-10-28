@@ -113,7 +113,7 @@ func TestBookSlot_100ConcurrentGoroutines(t *testing.T) {
 		DBTimeout: 3000 * time.Millisecond,
 	}
 
-	svc, err := service.NewReservationService(spyRepo, locker, cfg)
+	svc, err := service.NewReservationService(spyRepo, locker, locker, cfg)
 	if err != nil {
 		t.Fatalf("Failed to create service: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestInvariant3_Enforcement(t *testing.T) {
 		DBTimeout: 2000 * time.Millisecond,
 	}
 
-	svc, err := service.NewReservationService(nil, nil, invalidCfg)
+	svc, err := service.NewReservationService(nil, nil, nil, invalidCfg)
 	if err == nil {
 		t.Fatalf("Esperado error por violación del Invariante 3, pero NewReservationService tuvo éxito")
 	}
@@ -236,7 +236,7 @@ func TestInvariant3_Enforcement(t *testing.T) {
 		LockTTL:   2000 * time.Millisecond,
 		DBTimeout: 3000 * time.Millisecond,
 	}
-	svc, err = service.NewReservationService(nil, nil, validCfg)
+	svc, err = service.NewReservationService(nil, nil, nil, validCfg)
 	if err != nil {
 		t.Fatalf("Configuración válida falló inesperadamente: %v", err)
 	}

@@ -17,13 +17,14 @@ type Config struct {
 }
 
 type ReservationService struct {
-	repo   domain.ReservationRepository
-	locker domain.Locker
-	cfg    Config
+	repo      domain.ReservationRepository
+	locker    domain.Locker
+	publisher domain.EventPublisher
+	cfg       Config
 }
 
 // NewReservationService inicializa el servicio de reservas y valida estrictamente el Invariante 3.
-func NewReservationService(repo domain.ReservationRepository, locker domain.Locker, cfg Config) (*ReservationService, error) {
+func NewReservationService(repo domain.ReservationRepository, locker domain.Locker, publisher domain.EventPublisher, cfg Config) (*ReservationService, error) {
 	// Invariante 3 (Regla absoluta):
 	// "El TTL (Time-To-Live) del bloqueo en Redis NUNCA debe ser mayor al timeout de la transacción en PostgreSQL"
 	if cfg.LockTTL > cfg.DBTimeout {
@@ -38,9 +39,10 @@ func NewReservationService(repo domain.ReservationRepository, locker domain.Lock
 	}
 
 	return &ReservationService{
-		repo:   repo,
-		locker: locker,
-		cfg:    cfg,
+		repo:      repo,
+		locker:    locker,
+		publisher: publisher,
+		cfg:       cfg,
 	}, nil
 }
 
@@ -111,6 +113,23 @@ func (s *ReservationService) BookSlot(ctx context.Context, input BookSlotInput) 
 
 	if err := s.repo.InsertReservation(dbCtx, res); err != nil {
 		return nil, err
+	}
+
+	// 5. Propagación de Eventos (Redis Pub/Sub):
+	// Trampa evitada: Publicar en Redis Pub/Sub ÚNICAMENTE después de que PostgreSQL
+	// confirme la transacción con éxito (cero eventos fantasma en el dashboard).
+	if s.publisher != nil {
+		event := domain.DockEvent{
+			DockID:      res.DockID.String(),
+			DockName:    input.DockName,
+			ForwarderID: res.ForwarderID,
+			Status:      string(res.Status),
+			TimeRange:   fmt.Sprintf("[%s, %s)", res.StartTime.UTC().Format(time.RFC3339), res.EndTime.UTC().Format(time.RFC3339)),
+			Timestamp:   time.Now().UTC().Format(time.RFC3339),
+		}
+		if pubErr := s.publisher.Publish(ctx, "docks.events", event); pubErr != nil {
+			log.Printf("[WARN] Failed to publish dock event to Redis Pub/Sub: %v", pubErr)
+		}
 	}
 
 	return res, nil

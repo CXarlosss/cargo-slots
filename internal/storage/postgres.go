@@ -148,3 +148,8 @@ func (r *PostgresRepository) CountReservations(ctx context.Context, dockID uuid.
 	}
 	return count, nil
 }
+
+// Ping comprueba la conectividad con el pool de PostgreSQL.
+func (r *PostgresRepository) Ping(ctx context.Context) error {
+	return r.pool.Ping(ctx)
+}

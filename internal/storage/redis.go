@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -80,4 +81,18 @@ func (l *RedisLocker) Release(ctx context.Context, key, token string) error {
 	}
 
 	return nil
+}
+
+// Publish serializa el mensaje a JSON y lo publica en el canal Redis especificado.
+func (l *RedisLocker) Publish(ctx context.Context, channel string, message any) error {
+	payload, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message for pubsub: %w", err)
+	}
+	return l.client.Publish(ctx, channel, payload).Err()
+}
+
+// Ping comprueba la conectividad con Redis.
+func (l *RedisLocker) Ping(ctx context.Context) error {
+	return l.client.Ping(ctx).Err()
 }
