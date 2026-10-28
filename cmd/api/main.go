@@ -75,10 +75,18 @@ func main() {
 		port = "8080"
 	}
 
+	if err := RunApp(ctx, dbURL, redisAddr, port); err != nil {
+		log.Fatalf("[FATAL] Application terminated with error: %v", err)
+	}
+}
+
+// RunApp inicializa todos los subsistemas, arranca el servidor HTTP y gestiona el ciclo de vida
+// de Graceful Shutdown al cancelarse el contexto (por SIGINT/SIGTERM o context.CancelFunc).
+func RunApp(ctx context.Context, dbURL, redisAddr, port string) error {
 	// 1. Conexión a PostgreSQL (pgxpool)
 	pgRepo, err := storage.NewPostgresPool(ctx, dbURL)
 	if err != nil {
-		log.Fatalf("[FATAL] Could not connect to PostgreSQL at %s: %v", dbURL, err)
+		return fmt.Errorf("could not connect to PostgreSQL at %s: %w", dbURL, err)
 	}
 	defer pgRepo.Close()
 	log.Println("[INFO] Connected to PostgreSQL with connection pool")
@@ -86,7 +94,7 @@ func main() {
 	// 2. Conexión a Redis
 	redisClient, err := storage.NewRedisClient(ctx, redisAddr, "", 0)
 	if err != nil {
-		log.Fatalf("[FATAL] Could not connect to Redis at %s: %v", redisAddr, err)
+		return fmt.Errorf("could not connect to Redis at %s: %w", redisAddr, err)
 	}
 	defer redisClient.Close()
 	log.Println("[INFO] Connected to Redis")
@@ -100,7 +108,7 @@ func main() {
 
 	svc, err := service.NewReservationService(pgRepo, locker, locker, svcCfg)
 	if err != nil {
-		log.Fatalf("[FATAL] Failed to initialize ReservationService: %v", err)
+		return fmt.Errorf("failed to initialize ReservationService: %w", err)
 	}
 
 	// 4. Configurar Enrutador HTTP y Handlers
@@ -112,25 +120,38 @@ func main() {
 		Addr:         ":" + port,
 		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 60 * time.Second, // Permite streams SSE prolongados
+		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
 
+	serverErrCh := make(chan error, 1)
 	go func() {
 		log.Printf("[INFO] Cargo-Slots HTTP Server listening on port :%s", port)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("[FATAL] HTTP server error: %v", err)
+			serverErrCh <- err
 		}
 	}()
 
-	<-ctx.Done()
-	log.Println("[INFO] Shutting down Cargo-Slots API gracefully...")
+	select {
+	case err := <-serverErrCh:
+		return fmt.Errorf("http server failure: %w", err)
+	case <-ctx.Done():
+		log.Println("[INFO] Graceful shutdown iniciado (señal de terminación recibida)...")
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("[ERROR] Server forced to shutdown: %v", err)
+	} else {
+		log.Println("[INFO] Servidor HTTP detenido correctamente sin interrumpir peticiones en vuelo")
 	}
-	log.Println("[INFO] Server exited successfully.")
+
+	// Cierre ordenado de los pools de infraestructura
+	pgRepo.Close()
+	_ = redisClient.Close()
+	log.Println("[INFO] Conexiones cerradas a PostgreSQL y Redis.")
+	log.Println("[INFO] Graceful shutdown completado exitosamente.")
+	return nil
 }

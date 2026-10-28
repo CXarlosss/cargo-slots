@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -147,8 +148,12 @@ func (h *Handler) CreateReservation(w http.ResponseWriter, r *http.Request) {
 			return
 
 		default:
-			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Internal server error: " + err.Error()})
+			log.Printf("[WARN] Infrastructure failure during booking request: %v", err)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error":   "Service temporarily unavailable: infrastructure failover or connection disruption",
+				"details": err.Error(),
+			})
 			return
 		}
 	}

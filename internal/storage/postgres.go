@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"cargo-slots/internal/domain"
@@ -107,29 +109,57 @@ func (r *PostgresRepository) InsertReservation(ctx context.Context, res *domain.
 		statusStr = string(domain.StatusConfirmed)
 	}
 
-	err := r.pool.QueryRow(
-		ctx,
-		query,
-		res.DockID,
-		res.ForwarderID,
-		res.StartTime.UTC(),
-		res.EndTime.UTC(),
-		statusStr,
-	).Scan(&res.ID, &res.CreatedAt)
+	backoffs := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond}
+	const maxAttempts = 3
 
-	if err != nil {
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err := r.pool.QueryRow(
+			ctx,
+			query,
+			res.DockID,
+			res.ForwarderID,
+			res.StartTime.UTC(),
+			res.EndTime.UTC(),
+			statusStr,
+		).Scan(&res.ID, &res.CreatedAt)
+
+		if err == nil {
+			res.Status = domain.ReservationStatus(statusStr)
+			return nil
+		}
+
+		// Invariante y Regla de Dominio:
+		// SQLSTATE 23P01 (exclusion_violation) NUNCA se reintenta, es una verdad absoluta del modelo de negocio.
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
-			// SQLSTATE 23P01 = exclusion_violation
 			if pgErr.Code == "23P01" {
 				return domain.ErrDoubleBooking
 			}
+			// Errores de restricción o sintaxis no son transitorios
+			if strings.HasPrefix(pgErr.Code, "23") || strings.HasPrefix(pgErr.Code, "42") {
+				return fmt.Errorf("postgres domain constraint error [%s]: %w", pgErr.Code, err)
+			}
 		}
-		return fmt.Errorf("failed to insert reservation: %w", err)
+
+		// Si el contexto ya fue cancelado, abortar inmediatamente
+		if ctx.Err() != nil {
+			return fmt.Errorf("context aborted during database operation: %w", ctx.Err())
+		}
+
+		lastErr = err
+		if attempt < maxAttempts {
+			backoff := backoffs[attempt-1]
+			log.Printf("[WARN] Error transitorio en PostgreSQL (intento %d/%d): %v. Reintentando en %v...", attempt, maxAttempts, err, backoff)
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return fmt.Errorf("context cancelled during retry backoff: %w", ctx.Err())
+			}
+		}
 	}
 
-	res.Status = domain.ReservationStatus(statusStr)
-	return nil
+	return fmt.Errorf("failed to insert reservation after %d attempts: %w", maxAttempts, lastErr)
 }
 
 // CountReservations cuenta las reservas existentes para un muelle y rango de tiempo en PostgreSQL.
