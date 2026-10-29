@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"cargo-slots/internal/domain"
@@ -33,8 +34,19 @@ func NewHandler(svc *service.ReservationService, pgRepo *storage.PostgresReposit
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/reservations", h.CreateReservation)
+	mux.HandleFunc("GET /api/v1/reservations", h.ListReservations)
+	mux.HandleFunc("GET /api/v1/docks", h.ListDocks)
 	mux.HandleFunc("GET /api/v1/docks/stream", h.StreamDockEvents)
 	mux.HandleFunc("GET /health", h.Healthcheck)
+
+	// Servidor de archivos estáticos para la Consola Web de Operaciones
+	webDir := "./web"
+	if _, err := os.Stat(webDir); os.IsNotExist(err) {
+		if _, err2 := os.Stat("../web"); err2 == nil {
+			webDir = "../web"
+		}
+	}
+	mux.Handle("GET /", http.FileServer(http.Dir(webDir)))
 }
 
 type CreateReservationRequest struct {
@@ -246,4 +258,50 @@ func (h *Handler) Healthcheck(w http.ResponseWriter, r *http.Request) {
 		"postgres": "UP",
 		"redis":    "UP",
 	})
+}
+
+// ListDocks retorna todos los muelles disponibles (y realiza seed si está vacío).
+func (h *Handler) ListDocks(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Asegurar muelles por defecto (M-01 a M-06)
+	_ = h.pgRepo.SeedDefaultDocks(r.Context())
+
+	docks, err := h.pgRepo.ListDocks(r.Context())
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to list docks: " + err.Error()})
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(docks)
+}
+
+// ListReservations retorna las reservas registradas ordenadas cronológicamente.
+func (h *Handler) ListReservations(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	reservations, err := h.pgRepo.ListReservations(r.Context())
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to list reservations: " + err.Error()})
+		return
+	}
+
+	resp := make([]ReservationResponse, len(reservations))
+	for i, res := range reservations {
+		resp[i] = ReservationResponse{
+			ID:          res.ID.String(),
+			DockID:      res.DockID.String(),
+			ForwarderID: res.ForwarderID,
+			StartTime:   res.StartTime.UTC().Format(time.RFC3339),
+			EndTime:     res.EndTime.UTC().Format(time.RFC3339),
+			Status:      string(res.Status),
+			CreatedAt:   res.CreatedAt.UTC().Format(time.RFC3339),
+		}
+	}
+
+	_ = json.NewEncoder(w).Encode(resp)
 }

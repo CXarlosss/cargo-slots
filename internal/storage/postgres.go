@@ -183,3 +183,62 @@ func (r *PostgresRepository) CountReservations(ctx context.Context, dockID uuid.
 func (r *PostgresRepository) Ping(ctx context.Context) error {
 	return r.pool.Ping(ctx)
 }
+
+// ListDocks obtiene todos los muelles ordenados por nombre.
+func (r *PostgresRepository) ListDocks(ctx context.Context) ([]domain.Dock, error) {
+	query := `SELECT id, name FROM docks ORDER BY name ASC`
+	rows, err := r.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list docks: %w", err)
+	}
+	defer rows.Close()
+
+	var docks []domain.Dock
+	for rows.Next() {
+		var d domain.Dock
+		if err := rows.Scan(&d.ID, &d.Name); err != nil {
+			return nil, err
+		}
+		docks = append(docks, d)
+	}
+	return docks, rows.Err()
+}
+
+// ListReservations obtiene las reservas registradas ordenadas por inicio de franja horaria.
+func (r *PostgresRepository) ListReservations(ctx context.Context) ([]domain.Reservation, error) {
+	query := `
+		SELECT id, dock_id, forwarder_id, lower(time_range), upper(time_range), status, created_at
+		FROM reservations
+		ORDER BY lower(time_range) ASC
+		LIMIT 150
+	`
+	rows, err := r.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list reservations: %w", err)
+	}
+	defer rows.Close()
+
+	var res []domain.Reservation
+	for rows.Next() {
+		var rItem domain.Reservation
+		var statusStr string
+		if err := rows.Scan(&rItem.ID, &rItem.DockID, &rItem.ForwarderID, &rItem.StartTime, &rItem.EndTime, &statusStr, &rItem.CreatedAt); err != nil {
+			return nil, err
+		}
+		rItem.Status = domain.ReservationStatus(statusStr)
+		res = append(res, rItem)
+	}
+	return res, rows.Err()
+}
+
+// SeedDefaultDocks asegura la existencia de los muelles estándar de M-01 a M-06 si no existen.
+func (r *PostgresRepository) SeedDefaultDocks(ctx context.Context) error {
+	defaultNames := []string{"M-01", "M-02", "M-03", "M-04", "M-05", "M-06"}
+	for _, name := range defaultNames {
+		query := `INSERT INTO docks (name) VALUES ($1) ON CONFLICT (name) DO NOTHING`
+		if _, err := r.pool.Exec(ctx, query, name); err != nil {
+			return fmt.Errorf("failed to seed dock %s: %w", name, err)
+		}
+	}
+	return nil
+}
