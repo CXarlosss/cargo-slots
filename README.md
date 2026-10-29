@@ -70,7 +70,7 @@ Resultados certificados bajo prueba de estrés masivo con **k6**:
 
 ### 1. Clonar y levantar infraestructura
 ```bash
-git clone https://github.com/tu-usuario/cargo-slots.git
+git clone https://github.com/CXarlosss/cargo-slots.git
 cd cargo-slots
 docker compose up -d
 ```
@@ -80,11 +80,12 @@ docker compose up -d
 go test -v -race ./...
 ```
 
-### 3. Compilar y arrancar la API
+### 3. Compilar y arrancar la API con la Consola Visual
 ```bash
 go run ./cmd/api
 # Salida: [INFO] Cargo-Slots HTTP Server listening on port :8080
 ```
+> 🌐 **Consola de Operaciones en Vivo:** Abre tu navegador en **`http://localhost:8080`** para interactuar con la **Malla Berth Twin 2D**, el **Gantt Scheduler de 24h**, la **Terminal SSE** y el **Simulador de Carrera Concurrente (Chaos Trigger)**.
 
 ---
 
